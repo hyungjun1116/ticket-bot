@@ -538,6 +538,28 @@ client.on("interactionCreate", async (interaction) => {
       ],
     });
 
+// ✅ 등급 높은 티켓이 항상 위로 오게 자동 정렬
+try {
+  const category = ticketChannel.parent;
+
+  if (category) {
+    const siblings = category.children.cache
+      .filter(ch => ch.id !== ticketChannel.id)
+      .sort((a, b) => a.position - b.position);
+
+    let newPosition = siblings.size;
+
+    if (tier === "VVIP") newPosition = 0;
+    else if (tier === "VIP") newPosition = 1;
+    else if (prefix === "구매자") newPosition = 2;
+    else newPosition = 3;
+
+    await ticketChannel.setPosition(newPosition);
+  }
+} catch (err) {
+  console.log("정렬 오류:", err.message);
+}
+
     const embed = new EmbedBuilder()
       .setColor(0x2ecc71)
       .setTitle("🎫 티켓이 정상적으로 생성되었습니다")
