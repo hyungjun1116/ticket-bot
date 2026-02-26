@@ -50,7 +50,7 @@ const VVIP_DISCOUNT = 0.05; // VVIP 5%
 // 가격 환산: 0.1 = 1000원 기준 -> 10000 (0.3 -> 3000원)
 const PRICE_TO_WON_MULTIPLIER = 10000;
 
-// ✅ 상품 목록 (아누부부 1개 고정 제거)
+// ✅ 상품 목록
 const PRODUCTS = [
   { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.3, ticketName: "코브라10개" },
   { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.3, ticketName: "큐피트론10개" },
@@ -132,12 +132,6 @@ function getDiscountRateBySpent(spentWon) {
   return 0;
 }
 
-function getPrefixByTier(tier) {
-  if (tier === "VVIP") return "a";
-  if (tier === "VIP") return "b";
-  return "c";
-}
-
 function tierLabel(tier) {
   if (tier === "VVIP") return "🚨 **VVIP 우선 처리 티켓입니다**";
   if (tier === "VIP") return "✨ **VIP 우선 처리 티켓입니다**";
@@ -167,10 +161,35 @@ function buildTop5RankingText(data) {
     .join("\n");
 }
 
+// ✅ 티켓 접두사: VVIP > VIP > 구매자 > 신규
+async function getTicketPrefixForUser(guild, userId) {
+  const data = loadData();
+  const u = data.users?.[userId];
+  const spentWon = u?.spentWon || 0;
+  const orders = u?.orders || 0;
+
+  const tier = getTierBySpent(spentWon);
+
+  const member = await guild.members.fetch(userId).catch(() => null);
+  const hasBuyerRole = member?.roles?.cache?.some((r) => r.name === ROLE_BUYER_NAME);
+
+  const isBuyer = hasBuyerRole || orders > 0 || spentWon > 0;
+
+  if (tier === "VVIP") return "vvip";
+  if (tier === "VIP") return "vip";
+  if (isBuyer) return "구매자";
+  return "신규";
+}
+
 // =================== 봇 ===================
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers, // ✅ 멤버/역할 읽기
+  ],
 });
 
 client.once("ready", () => {
@@ -299,10 +318,7 @@ client.on("messageCreate", async (message) => {
     }
 
     const data = loadData();
-
-    // 랭킹/누적 구매금액 데이터만 초기화
     data.users = {};
-
     saveData(data);
 
     return message.reply("🏆 랭킹(누적 구매금액/구매횟수)만 초기화되었습니다.\n(매출 데이터는 유지됩니다)");
@@ -392,8 +408,11 @@ client.on("messageCreate", async (message) => {
       }
     }
 
+    // ✅ 완료 처리: 신규/vip/vvip/구매자 모두 대응
     let newName = message.channel.name;
-    if (!newName.includes("-완료-")) newName = newName.replace(/^([abc])-ticket-/, "$1-완료-ticket-");
+    if (!newName.includes("-완료-")) {
+      newName = newName.replace(/^(vvip|vip|구매자|신규)-ticket-/, "$1-완료-ticket-");
+    }
     if (newName.length > 100) newName = newName.slice(0, 100);
     await message.channel.setName(newName).catch(() => null);
 
@@ -408,7 +427,7 @@ client.on("interactionCreate", async (interaction) => {
   const findExistingTicket = () =>
     interaction.guild.channels.cache.find((ch) => {
       if (ch.type !== ChannelType.GuildText) return false;
-      if (!/(^a-ticket-|^b-ticket-|^c-ticket-)/.test(ch.name)) return false;
+      if (!/(^vvip-ticket-|^vip-ticket-|^구매자-ticket-|^신규-ticket-)/.test(ch.name)) return false;
       if (ch.name.includes("-완료-")) return false;
       const t = ch.topic || "";
       return t.includes(`buyer:${interaction.user.id}`);
@@ -487,9 +506,11 @@ client.on("interactionCreate", async (interaction) => {
 
     const data = loadData();
     const spentWon = data.users?.[interaction.user.id]?.spentWon || 0;
-
     const tier = getTierBySpent(spentWon);
-    const prefix = getPrefixByTier(tier);
+
+    // ✅ 접두사: VVIP/VIP/구매자/신규
+    const prefix = await getTicketPrefixForUser(interaction.guild, interaction.user.id);
+
     const discountRate = getDiscountRateBySpent(spentWon);
 
     const totalPriceStr = calcTotalPriceStr(selected.unitPrice, qty);
