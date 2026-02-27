@@ -57,14 +57,14 @@ const HOLD_STOCK_ON_TICKET_CREATE = true;
 
 // ✅ 상품 목록 (packSize = 수량 1개당 차감되는 "마리" 수)
 const PRODUCTS = [
-  { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.3, ticketName: "코브라10개", packSize: 10 },
-  { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.3, ticketName: "큐피트론10개", packSize: 10 },
-  { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.3, ticketName: "미야올10개", packSize: 10 },
+  { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.25, ticketName: "코브라10개", packSize: 10 },
+  { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.25, ticketName: "큐피트론10개", packSize: 10 },
+  { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.45, ticketName: "미야올10개", packSize: 10 },
 
-  // ✅ 추가된 아이템: 다이아 메타 (가격 0.75)
-  { label: "다이아 메타", value: "meta", unitPrice: 0.75, ticketName: "다이아메타", packSize: 1 },
+  // ✅ 추가된 아이템: 다이아 메타
+  { label: "다이아 메타", value: "meta", unitPrice: 0.7, ticketName: "다이아메타", packSize: 1 },
 
-  { label: "다이야 아누부부", value: "anubu", unitPrice: 0.4, ticketName: "아누부부", packSize: 1 },
+  { label: "다이야 아누부부", value: "anubu", unitPrice: 0.35, ticketName: "아누부부", packSize: 1 },
 ];
 
 // 데이터 파일
