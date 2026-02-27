@@ -77,7 +77,7 @@ function loadData() {
         totalOrders: 0,
         salesByDate: {},
         ordersByDate: {},
-        stock: {}, // ✅ 재고(마리 단위)
+        stock: {},
       };
       fs.writeFileSync(DATA_PATH, JSON.stringify(init, null, 2), "utf-8");
       return init;
@@ -179,6 +179,39 @@ function buildTop5RankingText(data) {
     .join("\n");
 }
 
+// ✅ 한글/코드 상품명 → value로 변환
+function resolveProductValue(inputRaw) {
+  if (!inputRaw) return null;
+
+  const input = String(inputRaw).trim().toLowerCase().replace(/\s+/g, "");
+
+  // 1) 코드로 직접
+  const byCode = PRODUCTS.find((p) => p.value.toLowerCase() === input);
+  if (byCode) return byCode.value;
+
+  // 2) ticketName(코브라10개)
+  const byTicketName = PRODUCTS.find((p) => String(p.ticketName).toLowerCase().replace(/\s+/g, "") === input);
+  if (byTicketName) return byTicketName.value;
+
+  // 3) label(전체명)
+  const byLabel = PRODUCTS.find((p) => String(p.label).toLowerCase().replace(/\s+/g, "") === input);
+  if (byLabel) return byLabel.value;
+
+  // 4) 키워드 포함 매칭
+  const keywordMap = [
+    { keywords: ["코브라"], value: "cobra10" },
+    { keywords: ["큐피트론", "큐피"], value: "cupid10" },
+    { keywords: ["미야올", "미야"], value: "miya10" },
+    { keywords: ["아누부부", "아누"], value: "anubu" },
+  ];
+
+  for (const item of keywordMap) {
+    if (item.keywords.some((k) => input.includes(k))) return item.value;
+  }
+
+  return null;
+}
+
 // ✅ 티켓 접두사: VVIP > VIP > 구매자 > 신규
 async function getTicketPrefixForUser(guild, userId) {
   const data = loadData();
@@ -214,7 +247,7 @@ function getStockAnimals(data, productValue) {
 
 function addStockAnimals(data, productValue, amount) {
   ensureStockKeys(data);
-  data.stock[productValue] = Math.max(0, (data.stock[productValue] || 0) + amount);
+  data.stock[productValue] = Math.max(0, (data.stock[p.value] || 0) + amount);
 }
 
 function setStockAnimals(data, productValue, amount) {
@@ -302,19 +335,23 @@ client.on("messageCreate", async (message) => {
     return message.reply(`📦 **현재 재고(마리 기준)**\n${buildStockText(data)}`);
   }
 
-  // ✅ 재고 충전 (관리자만)
-  // 사용법: !재고충전 cobra10 100   (100마리 추가)
+  // ✅ 재고 충전 (관리자만) - 한글/코드 지원
+  // 예: !재고충전 코브라 100
+  // 예: !재고충전 cobra10 100
   if (message.content.startsWith("!재고충전")) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const parts = message.content.trim().split(/\s+/);
-    const productValue = parts[1];
+
+    const productValue = resolveProductValue(parts[1]);
     const amount = Number(parts[2]);
 
     if (!productValue || !Number.isFinite(amount)) {
-      return message.reply("❌ 사용법: `!재고충전 상품값 마리수`\n예: `!재고충전 cobra10 100` (코브라 재고 100마리 추가)");
+      return message.reply(
+        "❌ 사용법: `!재고충전 상품명 마리수`\n" +
+          "예: `!재고충전 코브라 100` / `!재고충전 cobra10 100`\n" +
+          `가능 상품: 코브라, 큐피트론, 미야올, 아누부부`
+      );
     }
-    const p = PRODUCTS.find((x) => x.value === productValue);
-    if (!p) return message.reply(`❌ 상품값 오류. 가능한 값: ${PRODUCTS.map((x) => x.value).join(", ")}`);
 
     const data = loadData();
     addStockAnimals(data, productValue, Math.floor(amount));
@@ -323,20 +360,23 @@ client.on("messageCreate", async (message) => {
     return message.reply(`✅ 재고 충전 완료: **${productValue}** → 현재 ${formatAnimals(getStockAnimals(data, productValue))}`);
   }
 
-  // ✅ 재고 삭제/차감 (관리자만)
-  // 사용법1: !재고삭제 cobra10 30   (30마리 차감)
-  // 사용법2: !재고삭제 cobra10      (0으로 초기화)
+  // ✅ 재고 삭제/차감 (관리자만) - 한글/코드 지원
+  // 예: !재고삭제 코브라 30 (30마리 차감)
+  // 예: !재고삭제 코브라     (0으로 초기화)
   if (message.content.startsWith("!재고삭제")) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const parts = message.content.trim().split(/\s+/);
-    const productValue = parts[1];
+
+    const productValue = resolveProductValue(parts[1]);
     const amountRaw = parts[2];
 
     if (!productValue) {
-      return message.reply("❌ 사용법: `!재고삭제 상품값 [마리수]`\n예: `!재고삭제 cobra10 30` 또는 `!재고삭제 cobra10`(0으로)");
+      return message.reply(
+        "❌ 사용법: `!재고삭제 상품명 [마리수]`\n" +
+          "예: `!재고삭제 코브라 30` 또는 `!재고삭제 코브라`(0으로)\n" +
+          `가능 상품: 코브라, 큐피트론, 미야올, 아누부부`
+      );
     }
-    const p = PRODUCTS.find((x) => x.value === productValue);
-    if (!p) return message.reply(`❌ 상품값 오류. 가능한 값: ${PRODUCTS.map((x) => x.value).join(", ")}`);
 
     const data = loadData();
     if (amountRaw == null) {
@@ -615,9 +655,7 @@ client.on("interactionCreate", async (interaction) => {
     const data = loadData();
     const animals = getStockAnimals(data, selected.value);
     const packs = selected.packSize > 0 ? Math.floor(animals / selected.packSize) : 0;
-    if (packs <= 0) {
-      return interaction.reply({ content: "❌ 해당 상품은 현재 품절입니다.", ephemeral: true });
-    }
+    if (packs <= 0) return interaction.reply({ content: "❌ 해당 상품은 현재 품절입니다.", ephemeral: true });
 
     const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량 입력 (최대 100개)");
 
@@ -696,7 +734,6 @@ client.on("interactionCreate", async (interaction) => {
     const ticketChannel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      // topic에 hold/held 추가 (재고 홀드 복구/판별용)
       topic: `buyer:${interaction.user.id} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
       permissionOverwrites: [
         { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
@@ -704,30 +741,20 @@ client.on("interactionCreate", async (interaction) => {
       ],
     });
 
-    // ✅ 등급 높은 티켓이 항상 위로 오게 자동 정렬 (같은 카테고리 기준)
+    // ✅ 등급 높은 티켓이 항상 위로 오게 자동 정렬
     try {
       const category = ticketChannel.parent;
-      if (category) {
-        const siblings = category.children.cache
-          .filter((ch) => ch.id !== ticketChannel.id)
-          .sort((a, b) => a.position - b.position);
+      const siblings = category
+        ? category.children.cache.filter((ch) => ch.id !== ticketChannel.id).sort((a, b) => a.position - b.position)
+        : null;
 
-        let newPosition = siblings.size;
-        if (tier === "VVIP") newPosition = 0;
-        else if (tier === "VIP") newPosition = 1;
-        else if (prefix === "구매자") newPosition = 2;
-        else newPosition = 3;
+      let newPosition = siblings ? siblings.size : 1000;
+      if (tier === "VVIP") newPosition = 0;
+      else if (tier === "VIP") newPosition = 1;
+      else if (prefix === "구매자") newPosition = 2;
+      else newPosition = 3;
 
-        await ticketChannel.setPosition(newPosition);
-      } else {
-        // 카테고리 없을 때: 서버 최상단에서라도 대충 정렬
-        let newPosition = 1000;
-        if (tier === "VVIP") newPosition = 0;
-        else if (tier === "VIP") newPosition = 1;
-        else if (prefix === "구매자") newPosition = 2;
-        else newPosition = 3;
-        await ticketChannel.setPosition(newPosition);
-      }
+      await ticketChannel.setPosition(newPosition);
     } catch (e) {
       console.log("정렬 오류:", e?.message || e);
     }
