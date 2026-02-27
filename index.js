@@ -60,6 +60,10 @@ const PRODUCTS = [
   { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.3, ticketName: "코브라10개", packSize: 10 },
   { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.3, ticketName: "큐피트론10개", packSize: 10 },
   { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.3, ticketName: "미야올10개", packSize: 10 },
+
+  // ✅ 추가된 아이템: 다이아 메타 (가격 0.75)
+  { label: "다이아 메타", value: "meta", unitPrice: 0.75, ticketName: "다이아메타", packSize: 1 },
+
   { label: "다이야 아누부부", value: "anubu", unitPrice: 0.4, ticketName: "아누부부", packSize: 1 },
 ];
 
@@ -203,6 +207,9 @@ function resolveProductValue(inputRaw) {
     { keywords: ["큐피트론", "큐피"], value: "cupid10" },
     { keywords: ["미야올", "미야"], value: "miya10" },
     { keywords: ["아누부부", "아누"], value: "anubu" },
+
+    // ✅ 추가: 다이아 메타 키워드
+    { keywords: ["다이아메타", "다이아메타", "다이아메타", "다이아 메타", "메타"], value: "meta" },
   ];
 
   for (const item of keywordMap) {
@@ -430,7 +437,7 @@ client.on("messageCreate", async (message) => {
       return message.reply(
         "❌ 사용법: `!재고충전 상품명 마리수`\n" +
           "예: `!재고충전 코브라 100`\n" +
-          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부"
+          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부, 다이아메타"
       );
     }
 
@@ -455,7 +462,7 @@ client.on("messageCreate", async (message) => {
       return message.reply(
         "❌ 사용법: `!재고삭제 상품명 [마리수]`\n" +
           "예: `!재고삭제 코브라 30` 또는 `!재고삭제 코브라`\n" +
-          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부"
+          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부, 다이아메타"
       );
     }
 
