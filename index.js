@@ -245,7 +245,7 @@ function getStockAnimals(data, productValue) {
   return data.stock[productValue] || 0;
 }
 
-// ✅✅✅ FIXED: p 변수 오류 없애고 정상 동작
+// ✅✅✅ FIXED: 정상 동작
 function addStockAnimals(data, productValue, amount) {
   ensureStockKeys(data);
   data.stock[productValue] = Math.max(0, (data.stock[productValue] || 0) + amount);
@@ -258,17 +258,24 @@ function setStockAnimals(data, productValue, amount) {
 
 function buildStockText(data) {
   ensureStockKeys(data);
-  return PRODUCTS.map((p) => {
-    const animals = getStockAnimals(data, p.value);
-    const packs = p.packSize > 0 ? Math.floor(animals / p.packSize) : 0;
-    return `• **${p.value}** (${p.label}) → 재고: **${formatAnimals(animals)}** / 구매가능(수량): **${packs}개**`;
-  }).join("\n");
+  return PRODUCTS
+    .map((p) => {
+      const animals = getStockAnimals(data, p.value);
+      const packs = p.packSize > 0 ? Math.floor(animals / p.packSize) : 0;
+      return `• **${p.value}** (${p.label}) → 재고: **${formatAnimals(animals)}** / 구매가능(수량): **${packs}개**`;
+    })
+    .join("\n");
 }
 
 // =================== 봇 ===================
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 
 client.once("ready", () => {
@@ -327,6 +334,80 @@ client.on("messageCreate", async (message) => {
     });
 
     return message.reply("✅ 설치 완료");
+  }
+
+  // ✅ 총 매출 확인 (관리자만)  --- (원래 있던 명령어 복구)
+  if (message.content === "!매출") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있어.");
+    }
+    const data = loadData();
+    return message.reply(`📊 총 매출: ${formatWon(data.totalSalesWon)} / 📦 총 판매: ${data.totalOrders}건`);
+  }
+
+  // ✅ 오늘 매출 확인 (관리자만) --- (원래 있던 명령어 복구)
+  if (message.content === "!일매출") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있어.");
+    }
+    const data = loadData();
+    const todayKey = getKSTDateKey();
+    const todaySales = data.salesByDate?.[todayKey] || 0;
+    const todayOrders = data.ordersByDate?.[todayKey] || 0;
+    return message.reply(`📊 오늘(${todayKey}) 매출: ${formatWon(todaySales)} / ${todayOrders}건`);
+  }
+
+  // ✅ 랭킹 --- (원래 있던 명령어 복구)
+  if (message.content === "!랭킹") {
+    const data = loadData();
+    const topText = buildTop5RankingText(data);
+    return message.channel.send(`# 🏆 누적 구매금액 TOP 5\n${topText}`);
+  }
+
+  // ✅ 특정 유저 누적금액 (관리자만) --- (원래 있던 명령어 복구)
+  if (message.content.startsWith("!누적금액")) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있어.");
+    }
+    const mentioned = message.mentions.users.first();
+    if (!mentioned) return message.reply("❌ 조회할 유저를 멘션해주세요.\n예: !누적금액 @유저");
+
+    const data = loadData();
+    const userData = data.users?.[mentioned.id];
+    if (!userData) return message.reply("📊 해당 유저는 구매 기록이 없습니다.");
+
+    const spent = userData.spentWon || 0;
+    const tier = getTierBySpent(spent);
+    return message.reply(`📊 <@${mentioned.id}> 누적 구매금액: ${formatWon(spent)}\n🏷️ 현재 등급: ${tier}`);
+  }
+
+  // ✅ 매출만 초기화 (관리자만) - 누적 구매금액/랭킹 유지 --- (원래 있던 명령어 복구)
+  if (message.content === "!매출초기화") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있습니다.");
+    }
+
+    const data = loadData();
+    data.totalSalesWon = 0;
+    data.totalOrders = 0;
+    data.salesByDate = {};
+    data.ordersByDate = {};
+    saveData(data);
+
+    return message.reply("📉 매출 데이터만 초기화되었습니다.\n(누적 구매금액 / 등급 / 랭킹은 유지됩니다)");
+  }
+
+  // ✅ 랭킹만 초기화 (관리자만) - 매출 유지 --- (원래 있던 명령어 복구)
+  if (message.content === "!랭킹초기화") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있습니다.");
+    }
+
+    const data = loadData();
+    data.users = {};
+    saveData(data);
+
+    return message.reply("🏆 랭킹(누적 구매금액/구매횟수)만 초기화되었습니다.\n(매출 데이터는 유지됩니다)");
   }
 
   // ✅ 재고 보기 (관리자만)
@@ -409,7 +490,9 @@ client.on("messageCreate", async (message) => {
       const data = loadData();
       addStockAnimals(data, productValue, holdAnimals);
       saveData(data);
-      await message.reply(`✅ 홀드된 재고 복구: **${productValue}** +${formatAnimals(holdAnimals)} (현재 ${formatAnimals(getStockAnimals(data, productValue))})`);
+      await message.reply(
+        `✅ 홀드된 재고 복구: **${productValue}** +${formatAnimals(holdAnimals)} (현재 ${formatAnimals(getStockAnimals(data, productValue))})`
+      );
     } else {
       await message.reply("✅ 티켓 취소(재고 홀드 없음 또는 복구할 값 없음)");
     }
@@ -432,6 +515,7 @@ client.on("messageCreate", async (message) => {
     const wonMatch = topic.match(/won:(\d+)/);
     const baseWonMatch = topic.match(/basewon:(\d+)/);
     const discountMatch = topic.match(/discount:([0-9.]+)/);
+    const holdMatch = topic.match(/hold:(\d+)/);
     const heldMatch = topic.match(/held:(\d)/);
 
     const buyerId = buyerMatch ? buyerMatch[1] : null;
@@ -440,6 +524,8 @@ client.on("messageCreate", async (message) => {
     const finalWon = wonMatch ? Number(wonMatch[1]) : null;
     const baseWon = baseWonMatch ? Number(baseWonMatch[1]) : null;
     const discountRate = discountMatch ? Number(discountMatch[1]) : 0;
+
+    const holdAnimals = holdMatch ? Number(holdMatch[1]) : 0;
     const held = heldMatch ? Number(heldMatch[1]) : 0;
 
     if (!buyerId) return message.reply("❌ 구매자 정보 없음");
@@ -449,8 +535,33 @@ client.on("messageCreate", async (message) => {
     const productLabel = productObj ? productObj.label : "(상품정보없음)";
     const qtyText = Number.isInteger(qty) ? ` / 수량: ${qty}개` : "";
 
-    // 홀드 방식이면 여기서 재고 차감 안 함
-    // (held가 0인 구버전 티켓이면 완료 시 차감이 필요할 수 있음 — 필요하면 추가해줄게)
+    // ✅ 안전장치: held=0(홀드 안 된 티켓) 이면 여기서 재고 차감
+    // - held=1이면 티켓 생성 시점에 이미 차감돼있으니 중복 차감 X
+    if (productObj && (!HOLD_STOCK_ON_TICKET_CREATE || held !== 1)) {
+      const needAnimals =
+        Number.isInteger(qty) && qty > 0
+          ? qty * (productObj.packSize || 1)
+          : holdAnimals > 0
+            ? holdAnimals
+            : 0;
+
+      if (needAnimals > 0) {
+        const stockData = loadData();
+        const currentAnimals = getStockAnimals(stockData, productObj.value);
+
+        if (currentAnimals < needAnimals) {
+          const packs = productObj.packSize > 0 ? Math.floor(currentAnimals / productObj.packSize) : 0;
+          return message.reply(
+            `❌ 재고 부족으로 완료 불가\n` +
+              `현재: ${formatAnimals(currentAnimals)} (구매가능 ${packs}개)\n` +
+              `필요: ${formatAnimals(needAnimals)}`
+          );
+        }
+
+        addStockAnimals(stockData, productObj.value, -needAnimals);
+        saveData(stockData);
+      }
+    }
 
     // 데이터 반영
     const data = loadData();
@@ -471,11 +582,25 @@ client.on("messageCreate", async (message) => {
     const spent = data.users[buyerId].spentWon;
     const tier = getTierBySpent(spent);
 
+    // 역할 지급
     const buyerMember = await message.guild.members.fetch(buyerId).catch(() => null);
     if (buyerMember) {
       await grantRoleIfExists(buyerMember, ROLE_BUYER_NAME);
       if (tier === "VIP" || tier === "VVIP") await grantRoleIfExists(buyerMember, ROLE_VIP_NAME);
       if (tier === "VVIP") await grantRoleIfExists(buyerMember, ROLE_VVIP_NAME);
+    }
+
+    // 다음 등급 안내(원래 있던 스타일 복구)
+    let nextText = "";
+    if (tier === "NORMAL") nextText = `VIP까지 ${formatWon(VIP_MIN_WON - spent)} 남음`;
+    else if (tier === "VIP") nextText = `VVIP까지 ${formatWon(VVIP_MIN_WON - spent)} 남음`;
+    else nextText = "🎉 최고 등급 VVIP 입니다!";
+
+    // 남은 재고 표시(로그용)
+    let stockLeftText = "";
+    if (productObj) {
+      const left = getStockAnimals(loadData(), productObj.value);
+      stockLeftText = `\n📦 남은 재고: ${formatAnimals(left)}`;
     }
 
     await logChannel.send(
@@ -485,8 +610,20 @@ client.on("messageCreate", async (message) => {
         `💵 결제금액: ${formatWon(finalWon)}\n` +
         `🏷️ 등급: ${tier}\n` +
         `📌 누적 구매금액: ${formatWon(spent)}\n` +
-        `처리자: <@${message.author.id}>`
+        `⭐ ${nextText}` +
+        stockLeftText +
+        `\n처리자: <@${message.author.id}>`
     );
+
+    // ✅ 랭킹 자동 업로드 채널(원래 기능 복구)
+    if (RANK_CHANNEL_ID) {
+      const rankCh = await message.guild.channels.fetch(RANK_CHANNEL_ID).catch(() => null);
+      if (rankCh) {
+        const d = loadData();
+        const topText = buildTop5RankingText(d);
+        rankCh.send(`# 🏆 누적 구매금액 TOP 5\n${topText}`).catch(() => null);
+      }
+    }
 
     let newName = message.channel.name;
     if (!newName.includes("-완료-")) newName = newName.replace(/^(vvip|vip|구매자|신규)-ticket-/, "$1-완료-ticket-");
