@@ -50,12 +50,17 @@ const VVIP_DISCOUNT = 0.05; // VVIP 5%
 // 가격 환산: 0.1 = 1000원 기준 -> 10000 (0.3 -> 3000원)
 const PRICE_TO_WON_MULTIPLIER = 10000;
 
-// ✅ 상품 목록
+// ✅ 재고를 "티켓 생성 시점"에 홀드(예약)할지 여부
+// - true 추천: 동시구매 오버셀 방지
+// - 단, 미결제 티켓이면 재고가 묶이므로 !티켓취소로 복구 가능
+const HOLD_STOCK_ON_TICKET_CREATE = true;
+
+// ✅ 상품 목록 (packSize = 수량 1개당 차감되는 "마리" 수)
 const PRODUCTS = [
-  { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.3, ticketName: "코브라10개" },
-  { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.3, ticketName: "큐피트론10개" },
-  { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.3, ticketName: "미야올10개" },
-  { label: "다이야 아누부부", value: "anubu", unitPrice: 0.4, ticketName: "아누부부" },
+  { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.3, ticketName: "코브라10개", packSize: 10 },
+  { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.3, ticketName: "큐피트론10개", packSize: 10 },
+  { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.3, ticketName: "미야올10개", packSize: 10 },
+  { label: "다이야 아누부부", value: "anubu", unitPrice: 0.4, ticketName: "아누부부", packSize: 1 },
 ];
 
 // 데이터 파일
@@ -66,7 +71,14 @@ const DATA_PATH = path.join(__dirname, "data.json");
 function loadData() {
   try {
     if (!fs.existsSync(DATA_PATH)) {
-      const init = { users: {}, totalSalesWon: 0, totalOrders: 0, salesByDate: {}, ordersByDate: {} };
+      const init = {
+        users: {},
+        totalSalesWon: 0,
+        totalOrders: 0,
+        salesByDate: {},
+        ordersByDate: {},
+        stock: {}, // ✅ 재고(마리 단위)
+      };
       fs.writeFileSync(DATA_PATH, JSON.stringify(init, null, 2), "utf-8");
       return init;
     }
@@ -76,9 +88,10 @@ function loadData() {
     if (typeof parsed.totalOrders !== "number") parsed.totalOrders = 0;
     if (!parsed.salesByDate) parsed.salesByDate = {};
     if (!parsed.ordersByDate) parsed.ordersByDate = {};
+    if (!parsed.stock) parsed.stock = {};
     return parsed;
   } catch {
-    return { users: {}, totalSalesWon: 0, totalOrders: 0, salesByDate: {}, ordersByDate: {} };
+    return { users: {}, totalSalesWon: 0, totalOrders: 0, salesByDate: {}, ordersByDate: {}, stock: {} };
   }
 }
 
@@ -89,6 +102,11 @@ function saveData(data) {
 function formatWon(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "가격정보없음";
   return n.toLocaleString("ko-KR") + "원";
+}
+
+function formatAnimals(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "재고정보없음";
+  return `${n.toLocaleString("ko-KR")}마리`;
 }
 
 function getKSTDateKey(date = new Date()) {
@@ -172,7 +190,6 @@ async function getTicketPrefixForUser(guild, userId) {
 
   const member = await guild.members.fetch(userId).catch(() => null);
   const hasBuyerRole = member?.roles?.cache?.some((r) => r.name === ROLE_BUYER_NAME);
-
   const isBuyer = hasBuyerRole || orders > 0 || spentWon > 0;
 
   if (tier === "VVIP") return "vvip";
@@ -181,15 +198,43 @@ async function getTicketPrefixForUser(guild, userId) {
   return "신규";
 }
 
+// =================== 재고 유틸 ===================
+
+function ensureStockKeys(data) {
+  if (!data.stock) data.stock = {};
+  for (const p of PRODUCTS) {
+    if (typeof data.stock[p.value] !== "number") data.stock[p.value] = 0;
+  }
+}
+
+function getStockAnimals(data, productValue) {
+  ensureStockKeys(data);
+  return data.stock[productValue] || 0;
+}
+
+function addStockAnimals(data, productValue, amount) {
+  ensureStockKeys(data);
+  data.stock[productValue] = Math.max(0, (data.stock[productValue] || 0) + amount);
+}
+
+function setStockAnimals(data, productValue, amount) {
+  ensureStockKeys(data);
+  data.stock[productValue] = Math.max(0, amount);
+}
+
+function buildStockText(data) {
+  ensureStockKeys(data);
+  return PRODUCTS.map((p) => {
+    const animals = getStockAnimals(data, p.value);
+    const packs = p.packSize > 0 ? Math.floor(animals / p.packSize) : 0;
+    return `• **${p.value}** (${p.label}) → 재고: **${formatAnimals(animals)}** / 구매가능(수량): **${packs}개**`;
+  }).join("\n");
+}
+
 // =================== 봇 ===================
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers, // ✅ 멤버/역할 읽기
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
 });
 
 client.once("ready", () => {
@@ -250,20 +295,98 @@ client.on("messageCreate", async (message) => {
     return message.reply("✅ 설치 완료");
   }
 
+  // ✅ 재고 보기 (관리자만)
+  if (message.content === "!재고") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
+    const data = loadData();
+    return message.reply(`📦 **현재 재고(마리 기준)**\n${buildStockText(data)}`);
+  }
+
+  // ✅ 재고 충전 (관리자만)
+  // 사용법: !재고충전 cobra10 100   (100마리 추가)
+  if (message.content.startsWith("!재고충전")) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
+    const parts = message.content.trim().split(/\s+/);
+    const productValue = parts[1];
+    const amount = Number(parts[2]);
+
+    if (!productValue || !Number.isFinite(amount)) {
+      return message.reply("❌ 사용법: `!재고충전 상품값 마리수`\n예: `!재고충전 cobra10 100` (코브라 재고 100마리 추가)");
+    }
+    const p = PRODUCTS.find((x) => x.value === productValue);
+    if (!p) return message.reply(`❌ 상품값 오류. 가능한 값: ${PRODUCTS.map((x) => x.value).join(", ")}`);
+
+    const data = loadData();
+    addStockAnimals(data, productValue, Math.floor(amount));
+    saveData(data);
+
+    return message.reply(`✅ 재고 충전 완료: **${productValue}** → 현재 ${formatAnimals(getStockAnimals(data, productValue))}`);
+  }
+
+  // ✅ 재고 삭제/차감 (관리자만)
+  // 사용법1: !재고삭제 cobra10 30   (30마리 차감)
+  // 사용법2: !재고삭제 cobra10      (0으로 초기화)
+  if (message.content.startsWith("!재고삭제")) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
+    const parts = message.content.trim().split(/\s+/);
+    const productValue = parts[1];
+    const amountRaw = parts[2];
+
+    if (!productValue) {
+      return message.reply("❌ 사용법: `!재고삭제 상품값 [마리수]`\n예: `!재고삭제 cobra10 30` 또는 `!재고삭제 cobra10`(0으로)");
+    }
+    const p = PRODUCTS.find((x) => x.value === productValue);
+    if (!p) return message.reply(`❌ 상품값 오류. 가능한 값: ${PRODUCTS.map((x) => x.value).join(", ")}`);
+
+    const data = loadData();
+    if (amountRaw == null) {
+      setStockAnimals(data, productValue, 0);
+    } else {
+      const amount = Number(amountRaw);
+      if (!Number.isFinite(amount)) return message.reply("❌ 마리수는 숫자여야 함");
+      addStockAnimals(data, productValue, -Math.floor(amount));
+    }
+    saveData(data);
+
+    return message.reply(`✅ 재고 반영 완료: **${productValue}** → 현재 ${formatAnimals(getStockAnimals(data, productValue))}`);
+  }
+
+  // ✅ 티켓 취소 (관리자만 / 티켓에서만) - 홀드된 재고 복구
+  if (message.content === "!티켓취소") {
+    if (!message.channel.name.includes("ticket-")) return message.reply("❌ 티켓 채널에서만 사용 가능");
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
+
+    const topic = message.channel.topic || "";
+    const productMatch = topic.match(/product:([a-z0-9_]+)/i);
+    const holdMatch = topic.match(/hold:(\d+)/);
+    const heldMatch = topic.match(/held:(\d)/);
+
+    const productValue = productMatch ? productMatch[1] : null;
+    const holdAnimals = holdMatch ? Number(holdMatch[1]) : 0;
+    const held = heldMatch ? Number(heldMatch[1]) : 0;
+
+    if (HOLD_STOCK_ON_TICKET_CREATE && held === 1 && productValue && holdAnimals > 0) {
+      const data = loadData();
+      addStockAnimals(data, productValue, holdAnimals);
+      saveData(data);
+      await message.reply(`✅ 홀드된 재고 복구: **${productValue}** +${formatAnimals(holdAnimals)} (현재 ${formatAnimals(getStockAnimals(data, productValue))})`);
+    } else {
+      await message.reply("✅ 티켓 취소(재고 홀드 없음 또는 복구할 값 없음)");
+    }
+
+    setTimeout(() => message.channel.delete("Ticket canceled").catch(() => null), 1500);
+  }
+
   // ✅ 총 매출 확인 (관리자만)
   if (message.content === "!매출") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있어.");
-    }
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const data = loadData();
     return message.reply(`📊 총 매출: ${formatWon(data.totalSalesWon)} / 📦 총 판매: ${data.totalOrders}건`);
   }
 
   // ✅ 오늘 매출 확인 (관리자만)
   if (message.content === "!일매출") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있어.");
-    }
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const data = loadData();
     const todayKey = getKSTDateKey();
     const todaySales = data.salesByDate?.[todayKey] || 0;
@@ -280,9 +403,7 @@ client.on("messageCreate", async (message) => {
 
   // ✅ 특정 유저 누적금액 (관리자만)
   if (message.content.startsWith("!누적금액")) {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있어.");
-    }
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const mentioned = message.mentions.users.first();
     if (!mentioned) return message.reply("❌ 조회할 유저를 멘션해주세요.\n예: !누적금액 @유저");
 
@@ -297,39 +418,29 @@ client.on("messageCreate", async (message) => {
 
   // ✅ 매출만 초기화 (관리자만) - 누적 구매금액/랭킹 유지
   if (message.content === "!매출초기화") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있습니다.");
-    }
-
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있습니다.");
     const data = loadData();
     data.totalSalesWon = 0;
     data.totalOrders = 0;
     data.salesByDate = {};
     data.ordersByDate = {};
     saveData(data);
-
     return message.reply("📉 매출 데이터만 초기화되었습니다.\n(누적 구매금액 / 등급 / 랭킹은 유지됩니다)");
   }
 
   // ✅ 랭킹만 초기화 (관리자만) - 매출 유지
   if (message.content === "!랭킹초기화") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있습니다.");
-    }
-
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있습니다.");
     const data = loadData();
     data.users = {};
     saveData(data);
-
     return message.reply("🏆 랭킹(누적 구매금액/구매횟수)만 초기화되었습니다.\n(매출 데이터는 유지됩니다)");
   }
 
   // ✅ 구매완료 (관리자만 / 티켓에서만)
   if (message.content === "!구매완료") {
     if (!message.channel.name.includes("ticket-")) return message.reply("❌ 티켓 채널에서만 사용 가능");
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ 관리자만 사용할 수 있어.");
-    }
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
 
     const logChannel = await message.guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (!logChannel) return message.reply("❌ 구매-로그 채널 ID 확인");
@@ -341,6 +452,8 @@ client.on("messageCreate", async (message) => {
     const wonMatch = topic.match(/won:(\d+)/);
     const baseWonMatch = topic.match(/basewon:(\d+)/);
     const discountMatch = topic.match(/discount:([0-9.]+)/);
+    const holdMatch = topic.match(/hold:(\d+)/);
+    const heldMatch = topic.match(/held:(\d)/);
 
     const buyerId = buyerMatch ? buyerMatch[1] : null;
     const productValue = productMatch ? productMatch[1] : null;
@@ -349,6 +462,9 @@ client.on("messageCreate", async (message) => {
     const baseWon = baseWonMatch ? Number(baseWonMatch[1]) : null;
     const discountRate = discountMatch ? Number(discountMatch[1]) : 0;
 
+    const holdAnimals = holdMatch ? Number(holdMatch[1]) : 0;
+    const held = heldMatch ? Number(heldMatch[1]) : 0;
+
     if (!buyerId) return message.reply("❌ 구매자 정보 없음");
     if (typeof finalWon !== "number") return message.reply("❌ 결제금액 정보 없음");
 
@@ -356,7 +472,23 @@ client.on("messageCreate", async (message) => {
     const productLabel = productObj ? productObj.label : "(상품정보없음)";
     const qtyText = Number.isInteger(qty) ? ` / 수량: ${qty}개` : "";
 
+    // ✅ 재고 차감 (홀드가 아니면 여기서 차감)
+    if (productObj) {
+      const needAnimals = Number.isInteger(qty) ? qty * (productObj.packSize || 1) : 0;
+      if (!HOLD_STOCK_ON_TICKET_CREATE || held !== 1) {
+        const dataForStock = loadData();
+        const nowStock = getStockAnimals(dataForStock, productObj.value);
+        if (nowStock < needAnimals) {
+          return message.reply(`❌ 재고 부족으로 완료 불가.\n현재: ${formatAnimals(nowStock)} / 필요: ${formatAnimals(needAnimals)}`);
+        }
+        addStockAnimals(dataForStock, productObj.value, -needAnimals);
+        saveData(dataForStock);
+      }
+    }
+
     const data = loadData();
+    ensureStockKeys(data);
+
     if (!data.users[buyerId]) data.users[buyerId] = { spentWon: 0, orders: 0 };
     if (typeof data.users[buyerId].spentWon !== "number") data.users[buyerId].spentWon = 0;
     if (typeof data.users[buyerId].orders !== "number") data.users[buyerId].orders = 0;
@@ -388,6 +520,13 @@ client.on("messageCreate", async (message) => {
     else if (tier === "VIP") nextText = `VVIP까지 ${formatWon(VVIP_MIN_WON - spent)} 남음`;
     else nextText = "🎉 최고 등급 VVIP 입니다!";
 
+    // 재고 남은량 표시
+    let stockLeftText = "";
+    if (productObj) {
+      const left = getStockAnimals(loadData(), productObj.value);
+      stockLeftText = `\n📦 남은 재고: ${formatAnimals(left)} (상품: ${productObj.value})`;
+    }
+
     await logChannel.send(
       `✅ <@${buyerId}>님 ${productLabel}${qtyText} 구매 감사합니다! 🎉\n` +
         `💰 원가: ${typeof baseWon === "number" ? formatWon(baseWon) : formatWon(finalWon)}\n` +
@@ -395,8 +534,9 @@ client.on("messageCreate", async (message) => {
         `💵 결제금액: ${formatWon(finalWon)}\n` +
         `🏷️ 등급: ${tier}\n` +
         `📌 누적 구매금액: ${formatWon(spent)}\n` +
-        `⭐ ${nextText}\n` +
-        `처리자: <@${message.author.id}>`
+        `⭐ ${nextText}` +
+        stockLeftText +
+        `\n처리자: <@${message.author.id}>`
     );
 
     if (RANK_CHANNEL_ID) {
@@ -408,7 +548,7 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // ✅ 완료 처리: 신규/vip/vvip/구매자 모두 대응
+    // ✅ 완료 처리: vvip/vip/구매자/신규 모두 대응
     let newName = message.channel.name;
     if (!newName.includes("-완료-")) {
       newName = newName.replace(/^(vvip|vip|구매자|신규)-ticket-/, "$1-완료-ticket-");
@@ -436,19 +576,24 @@ client.on("interactionCreate", async (interaction) => {
   // 구매하기 버튼 → 상품 선택
   if (interaction.isButton() && interaction.customId === "buy_open") {
     const already = findExistingTicket();
-    if (already) {
-      return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
-    }
+    if (already) return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
+
+    const data = loadData();
 
     const menu = new StringSelectMenuBuilder()
       .setCustomId("product_select")
       .setPlaceholder("상품을 선택하세요")
       .addOptions(
-        PRODUCTS.map((p) => ({
-          label: p.label,
-          description: `가격: ${p.unitPrice}`,
-          value: p.value,
-        }))
+        PRODUCTS.map((p) => {
+          const animals = getStockAnimals(data, p.value);
+          const packs = p.packSize > 0 ? Math.floor(animals / p.packSize) : 0;
+          const soldout = packs <= 0;
+          return {
+            label: soldout ? `❌ 품절 | ${p.label}` : p.label,
+            description: soldout ? `품절 (재고 0)` : `가격: ${p.unitPrice} / 재고(구매가능): ${packs}개`,
+            value: p.value,
+          };
+        })
       );
 
     return interaction.reply({
@@ -461,13 +606,18 @@ client.on("interactionCreate", async (interaction) => {
   // 상품 선택 → 수량 입력(모달)
   if (interaction.isStringSelectMenu() && interaction.customId === "product_select") {
     const already = findExistingTicket();
-    if (already) {
-      return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
-    }
+    if (already) return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
 
     const selectedValue = interaction.values[0];
     const selected = PRODUCTS.find((p) => p.value === selectedValue);
     if (!selected) return interaction.reply({ content: "상품 정보를 찾을 수 없음 ❌", ephemeral: true });
+
+    const data = loadData();
+    const animals = getStockAnimals(data, selected.value);
+    const packs = selected.packSize > 0 ? Math.floor(animals / selected.packSize) : 0;
+    if (packs <= 0) {
+      return interaction.reply({ content: "❌ 해당 상품은 현재 품절입니다.", ephemeral: true });
+    }
 
     const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량 입력 (최대 100개)");
 
@@ -485,9 +635,7 @@ client.on("interactionCreate", async (interaction) => {
   // 모달 제출 → 티켓 생성
   if (interaction.isModalSubmit() && interaction.customId.startsWith("qty_modal:")) {
     const already = findExistingTicket();
-    if (already) {
-      return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
-    }
+    if (already) return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
 
     const productValue = interaction.customId.split(":")[1];
     const selected = PRODUCTS.find((p) => p.value === productValue);
@@ -495,22 +643,39 @@ client.on("interactionCreate", async (interaction) => {
 
     const qtyRaw = interaction.fields.getTextInputValue("qty").trim();
     const qtyClean = qtyRaw.replace(/,/g, "").replace(/\s/g, "");
-    if (!/^\d+$/.test(qtyClean)) {
-      return interaction.reply({ content: "❌ 수량은 숫자만 입력하세요. 예: 3", ephemeral: true });
-    }
+    if (!/^\d+$/.test(qtyClean)) return interaction.reply({ content: "❌ 수량은 숫자만 입력하세요. 예: 3", ephemeral: true });
 
     const qty = Number(qtyClean);
-    if (!Number.isInteger(qty) || qty < 1 || qty > 100) {
-      return interaction.reply({ content: "❌ 수량은 1~100 사이로 입력하세요.", ephemeral: true });
+    if (!Number.isInteger(qty) || qty < 1 || qty > 100) return interaction.reply({ content: "❌ 수량은 1~100 사이로 입력하세요.", ephemeral: true });
+
+    const needAnimals = qty * (selected.packSize || 1);
+
+    // ✅ 재고 체크 (+ 홀드)
+    const stockData = loadData();
+    const currentAnimals = getStockAnimals(stockData, selected.value);
+    if (currentAnimals < needAnimals) {
+      const packs = selected.packSize > 0 ? Math.floor(currentAnimals / selected.packSize) : 0;
+      return interaction.reply({
+        content:
+          `❌ 재고 부족!\n` +
+          `현재 재고: ${formatAnimals(currentAnimals)} (구매가능 수량: ${packs}개)\n` +
+          `요청: ${formatAnimals(needAnimals)} (수량 ${qty}개)`,
+        ephemeral: true,
+      });
+    }
+
+    let held = 0;
+    if (HOLD_STOCK_ON_TICKET_CREATE) {
+      addStockAnimals(stockData, selected.value, -needAnimals);
+      saveData(stockData);
+      held = 1;
     }
 
     const data = loadData();
     const spentWon = data.users?.[interaction.user.id]?.spentWon || 0;
     const tier = getTierBySpent(spentWon);
 
-    // ✅ 접두사: VVIP/VIP/구매자/신규
     const prefix = await getTicketPrefixForUser(interaction.guild, interaction.user.id);
-
     const discountRate = getDiscountRateBySpent(spentWon);
 
     const totalPriceStr = calcTotalPriceStr(selected.unitPrice, qty);
@@ -531,34 +696,41 @@ client.on("interactionCreate", async (interaction) => {
     const ticketChannel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      topic: `buyer:${interaction.user.id} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate}`,
+      // topic에 hold/held 추가 (재고 홀드 복구/판별용)
+      topic: `buyer:${interaction.user.id} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
       permissionOverwrites: [
         { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel] },
       ],
     });
 
-// ✅ 등급 높은 티켓이 항상 위로 오게 자동 정렬
-try {
-  const category = ticketChannel.parent;
+    // ✅ 등급 높은 티켓이 항상 위로 오게 자동 정렬 (같은 카테고리 기준)
+    try {
+      const category = ticketChannel.parent;
+      if (category) {
+        const siblings = category.children.cache
+          .filter((ch) => ch.id !== ticketChannel.id)
+          .sort((a, b) => a.position - b.position);
 
-  if (category) {
-    const siblings = category.children.cache
-      .filter(ch => ch.id !== ticketChannel.id)
-      .sort((a, b) => a.position - b.position);
+        let newPosition = siblings.size;
+        if (tier === "VVIP") newPosition = 0;
+        else if (tier === "VIP") newPosition = 1;
+        else if (prefix === "구매자") newPosition = 2;
+        else newPosition = 3;
 
-    let newPosition = siblings.size;
-
-    if (tier === "VVIP") newPosition = 0;
-    else if (tier === "VIP") newPosition = 1;
-    else if (prefix === "구매자") newPosition = 2;
-    else newPosition = 3;
-
-    await ticketChannel.setPosition(newPosition);
-  }
-} catch (err) {
-  console.log("정렬 오류:", err.message);
-}
+        await ticketChannel.setPosition(newPosition);
+      } else {
+        // 카테고리 없을 때: 서버 최상단에서라도 대충 정렬
+        let newPosition = 1000;
+        if (tier === "VVIP") newPosition = 0;
+        else if (tier === "VIP") newPosition = 1;
+        else if (prefix === "구매자") newPosition = 2;
+        else newPosition = 3;
+        await ticketChannel.setPosition(newPosition);
+      }
+    } catch (e) {
+      console.log("정렬 오류:", e?.message || e);
+    }
 
     const embed = new EmbedBuilder()
       .setColor(0x2ecc71)
@@ -572,6 +744,7 @@ try {
           "🧾 **주문 정보**\n" +
           `📦 제품: **${selected.label}**\n` +
           `📦 수량: **${qty}개**\n` +
+          `🐾 차감: **${formatAnimals(needAnimals)}**\n` +
           `💰 원가: **${formatWon(baseWon)}**\n` +
           `💵 결제금액: **${formatWon(finalWon)}**\n\n` +
           "💳 **입금 안내**\n" +
@@ -582,10 +755,7 @@ try {
       .setFooter({ text: "입금금액을 채팅으로 입력할 필요 없습니다. 스샷만 보내주세요." })
       .setTimestamp();
 
-    const copyBtn = new ButtonBuilder()
-      .setCustomId(`copy_account:${finalWon}`)
-      .setLabel("💳 계좌 문구 복사")
-      .setStyle(ButtonStyle.Success);
+    const copyBtn = new ButtonBuilder().setCustomId(`copy_account:${finalWon}`).setLabel("💳 계좌 문구 복사").setStyle(ButtonStyle.Success);
 
     await ticketChannel.send({
       content: `${ADMIN_MENTIONS}\n${priorityText}\n\n💰 **결제금액: ${formatWon(finalWon)}** (${discountText})`,
