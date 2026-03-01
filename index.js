@@ -885,18 +885,36 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.reply({ content: `\`\`\`${text}\`\`\``, ephemeral: true });
   }
 
-  // 후기 버튼 → 모달
+  // =================== 후기(제품 선택식) ===================
+
+  // 후기 버튼 → 제품 선택 드롭다운
   if (interaction.isButton() && interaction.customId === "review_open") {
     if (!REVIEW_CHANNEL_ID) return interaction.reply({ content: "❌ REVIEW_CHANNEL_ID 먼저 설정해줘.", ephemeral: true });
 
-    const modal = new ModalBuilder().setCustomId("review_modal").setTitle("구매후기 작성");
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("review_product_select")
+      .setPlaceholder("후기 남길 제품을 선택하세요")
+      .addOptions(
+        PRODUCTS.map((p) => ({
+          label: p.label,
+          value: p.value,
+        }))
+      );
 
-    const productInput = new TextInputBuilder()
-      .setCustomId("product")
-      .setLabel("구매한 상품")
-      .setPlaceholder("예: 다이아 메타")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+    return interaction.reply({
+      content: "📦 제품을 선택하세요.",
+      components: [new ActionRowBuilder().addComponents(menu)],
+      ephemeral: true,
+    });
+  }
+
+  // 제품 선택 → 별점/내용 모달
+  if (interaction.isStringSelectMenu() && interaction.customId === "review_product_select") {
+    const productValue = interaction.values[0];
+    const selected = PRODUCTS.find((p) => p.value === productValue);
+    if (!selected) return interaction.reply({ content: "상품 정보를 찾을 수 없음 ❌", ephemeral: true });
+
+    const modal = new ModalBuilder().setCustomId(`review_modal:${selected.value}`).setTitle("구매후기 작성");
 
     const starInput = new TextInputBuilder()
       .setCustomId("stars")
@@ -912,18 +930,19 @@ client.on("interactionCreate", async (interaction) => {
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true);
 
-    modal.addComponents(new ActionRowBuilder().addComponents(productInput));
     modal.addComponents(new ActionRowBuilder().addComponents(starInput));
     modal.addComponents(new ActionRowBuilder().addComponents(contentInput));
 
     return interaction.showModal(modal);
   }
 
-  // 후기 모달 제출 → 후기 채널에 Embed 업로드(사진 느낌)
-  if (interaction.isModalSubmit() && interaction.customId === "review_modal") {
+  // 후기 모달 제출 → 후기 채널 업로드
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("review_modal:")) {
     if (!REVIEW_CHANNEL_ID) return interaction.reply({ content: "❌ REVIEW_CHANNEL_ID 먼저 설정해줘.", ephemeral: true });
 
-    const product = interaction.fields.getTextInputValue("product").trim();
+    const productValue = interaction.customId.split(":")[1];
+    const selected = PRODUCTS.find((p) => p.value === productValue);
+
     const starsRaw = interaction.fields.getTextInputValue("stars").trim();
     const content = interaction.fields.getTextInputValue("content").trim();
 
@@ -941,7 +960,11 @@ client.on("interactionCreate", async (interaction) => {
       .setColor(0x2f8cff)
       .setTitle(`${interaction.user.username}님의 구매후기`)
       .setThumbnail(interaction.user.displayAvatarURL({ size: 256 }))
-      .setDescription(`• 구매한 상품: ${product}\n• 별점: ${stars}\n• 후기내용: ${content}`)
+      .setDescription(
+        `• 구매한 상품: ${selected?.label || "상품정보없음"}\n` +
+          `• 별점: ${stars}\n` +
+          `• 후기내용: ${content}`
+      )
       .setTimestamp();
 
     await reviewCh.send({ embeds: [embed] });
