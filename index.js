@@ -72,7 +72,7 @@ function loadData() {
   try {
     if (!fs.existsSync(DATA_PATH)) {
       const init = {
-        users: {}, // { [userId]: { spentWon, orders, psid? } }
+        users: {}, // { [userId]: { spentWon, orders } }
         totalSalesWon: 0,
         totalOrders: 0,
         salesByDate: {},
@@ -326,7 +326,7 @@ client.on("messageCreate", async (message) => {
 
     const panelEmbed = new EmbedBuilder()
       .setColor(0x2f8cff)
-      .setTitle("알파몰")
+      .setTitle("미프카샵")
       .setDescription("아래 버튼을 클릭해 제품을 구매하실 수 있습니다.")
       .setTimestamp();
 
@@ -532,7 +532,6 @@ client.on("messageCreate", async (message) => {
     const discountMatch = topic.match(/discount:([0-9.]+)/);
     const holdMatch = topic.match(/hold:(\d+)/);
     const heldMatch = topic.match(/held:(\d)/);
-    const psidMatch = topic.match(/psid:([^ ]+)/i);
 
     const buyerId = buyerMatch ? buyerMatch[1] : null;
     const productValue = productMatch ? productMatch[1] : null;
@@ -543,8 +542,6 @@ client.on("messageCreate", async (message) => {
 
     const holdAnimals = holdMatch ? Number(holdMatch[1]) : 0;
     const held = heldMatch ? Number(heldMatch[1]) : 0;
-
-    const psid = psidMatch ? psidMatch[1] : "미입력";
 
     if (!buyerId) return message.reply("❌ 구매자 정보 없음");
     if (typeof finalWon !== "number") return message.reply("❌ 결제금액 정보 없음");
@@ -588,9 +585,6 @@ client.on("messageCreate", async (message) => {
     data.users[buyerId].spentWon += finalWon;
     data.users[buyerId].orders += 1;
 
-    // ✅ PSID 저장(정보 버튼에서 보이게)
-    data.users[buyerId].psid = psid;
-
     data.totalSalesWon += finalWon;
     data.totalOrders += 1;
 
@@ -623,17 +617,16 @@ client.on("messageCreate", async (message) => {
       stockLeftText = `\n📦 남은 재고: ${formatAnimals(left)}`;
     }
 
-    // ✅ 구매로그 Embed (사진 느낌: • 리스트 / PSID, DISCORD, 구매상품, 구매 갯수)
+    // ✅ 구매로그 Embed (사진 느낌: • 리스트 / DISCORD, 구매상품, 구매 갯수)
     const buyerUser = await client.users.fetch(buyerId).catch(() => null);
     const purchaseEmbed = new EmbedBuilder()
       .setColor(0x2f8cff)
-      .setTitle(`${psid}님의 구매 로그`)
+      .setTitle(`${buyerUser?.username || "유저"}님의 구매 로그`)
       .setThumbnail(buyerUser?.displayAvatarURL?.({ size: 256 }) || null)
       .setDescription(
-        `• 🆔 유저 PSID: **${psid}**\n` +
         `• 👤 유저 DISCORD: <@${buyerId}>\n` +
-        `• 💰 구매상품: ${productLabel}\n` +
-        `• 💰 구매 갯수: **${Number.isInteger(qty) ? qty : "미기록"}**`
+          `• 💰 구매상품: ${productLabel}\n` +
+          `• 💰 구매 갯수: **${Number.isInteger(qty) ? qty : "미기록"}**`
       )
       .setTimestamp();
 
@@ -656,13 +649,13 @@ client.on("messageCreate", async (message) => {
 
     await message.reply(
       `✅ 구매 완료 처리됨\n` +
-      `💰 원가: ${typeof baseWon === "number" ? formatWon(baseWon) : formatWon(finalWon)}\n` +
-      `💸 할인: ${Math.round(discountRate * 100)}%\n` +
-      `💵 결제금액: ${formatWon(finalWon)}\n` +
-      `🏷️ 등급: ${tier}\n` +
-      `📌 누적 구매금액: ${formatWon(spent)}\n` +
-      `⭐ ${nextText}${stockLeftText}\n` +
-      `5초 후 티켓 삭제`
+        `💰 원가: ${typeof baseWon === "number" ? formatWon(baseWon) : formatWon(finalWon)}\n` +
+        `💸 할인: ${Math.round(discountRate * 100)}%\n` +
+        `💵 결제금액: ${formatWon(finalWon)}\n` +
+        `🏷️ 등급: ${tier}\n` +
+        `📌 누적 구매금액: ${formatWon(spent)}\n` +
+        `⭐ ${nextText}${stockLeftText}\n` +
+        `5초 후 티켓 삭제`
     );
 
     setTimeout(() => message.channel.delete("Auto delete after purchase complete").catch(() => null), 5000);
@@ -681,11 +674,10 @@ client.on("interactionCreate", async (interaction) => {
       return t.includes(`buyer:${interaction.user.id}`);
     });
 
-  // ✅ 패널 "정보" 버튼 (사진 느낌)
+  // ✅ 패널 "정보" 버튼 (PSID 삭제)
   if (interaction.isButton() && interaction.customId === "panel_info") {
     const data = loadData();
     const u = data.users?.[interaction.user.id] || {};
-    const psid = u.psid || "미등록";
     const spentWon = u.spentWon || 0;
 
     const tier = getTierBySpent(spentWon);
@@ -695,13 +687,12 @@ client.on("interactionCreate", async (interaction) => {
       .setColor(0x2f8cff)
       .setTitle("📝 기본 정보")
       .setDescription(
-        `• 👤 아이디: ${interaction.user.id}\n` +
-        `• 🆔 PSID: ${psid}\n\n` +
-        `💰 **금액 정보**\n` +
-        `• 💵 잔액: 0원\n` +
-        `• 🎁 누적구매: ${formatWon(spentWon)}\n\n` +
-        `👑 **등급 정보**\n` +
-        `• 🏅 등급: ${tierText}`
+        `• 👤 아이디: ${interaction.user.id}\n\n` +
+          `💰 **금액 정보**\n` +
+          `• 💵 잔액: 0원\n` +
+          `• 🎁 누적구매: ${formatWon(spentWon)}\n\n` +
+          `👑 **등급 정보**\n` +
+          `• 🏅 등급: ${tierText}`
       )
       .setTimestamp();
 
@@ -753,7 +744,7 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // 상품 선택 → 수량+PSID 입력(모달)
+  // 상품 선택 → 수량 입력(모달) (PSID/PAID 입력 삭제)
   if (interaction.isStringSelectMenu() && interaction.customId === "product_select") {
     const already = findExistingTicket();
     if (already) return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
@@ -767,7 +758,7 @@ client.on("interactionCreate", async (interaction) => {
     const packs = selected.packSize > 0 ? Math.floor(animals / selected.packSize) : 0;
     if (packs <= 0) return interaction.reply({ content: "❌ 해당 상품은 현재 품절입니다.", ephemeral: true });
 
-    const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량/PSID 입력");
+    const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량 입력");
 
     const qtyInput = new TextInputBuilder()
       .setCustomId("qty")
@@ -776,15 +767,7 @@ client.on("interactionCreate", async (interaction) => {
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const psidInput = new TextInputBuilder()
-      .setCustomId("psid")
-      .setLabel("PSID 입력(필수)")
-      .setPlaceholder("예: zhqmfk2011")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
     modal.addComponents(new ActionRowBuilder().addComponents(qtyInput));
-    modal.addComponents(new ActionRowBuilder().addComponents(psidInput));
     return interaction.showModal(modal);
   }
 
@@ -803,10 +786,6 @@ client.on("interactionCreate", async (interaction) => {
 
     const qty = Number(qtyClean);
     if (!Number.isInteger(qty) || qty < 1 || qty > 100) return interaction.reply({ content: "❌ 수량은 1~100 사이로 입력하세요.", ephemeral: true });
-
-    const psidRaw = interaction.fields.getTextInputValue("psid").trim();
-    const psid = psidRaw.replace(/\s+/g, "");
-    if (!psid) return interaction.reply({ content: "❌ PSID를 입력해주세요.", ephemeral: true });
 
     const needAnimals = qty * (selected.packSize || 1);
 
@@ -830,12 +809,6 @@ client.on("interactionCreate", async (interaction) => {
       held = 1;
     }
 
-    // ✅ PSID 유저 데이터에도 저장(정보 버튼에서 보이게)
-    const d0 = loadData();
-    if (!d0.users[interaction.user.id]) d0.users[interaction.user.id] = { spentWon: 0, orders: 0 };
-    d0.users[interaction.user.id].psid = psid;
-    saveData(d0);
-
     const data = loadData();
     const spentWon = data.users?.[interaction.user.id]?.spentWon || 0;
     const tier = getTierBySpent(spentWon);
@@ -856,7 +829,7 @@ client.on("interactionCreate", async (interaction) => {
     const ticketChannel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      topic: `buyer:${interaction.user.id} psid:${psid} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
+      topic: `buyer:${interaction.user.id} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
       permissionOverwrites: [
         { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel] },
@@ -881,12 +854,11 @@ client.on("interactionCreate", async (interaction) => {
       console.log("정렬 오류:", e?.message || e);
     }
 
-    // ✅✅✅ 티켓 생성 안내 문구 (C안 + 차감 제거 + 샵 느낌)
+    // ✅ 티켓 생성 안내 문구 (C안 + 차감 제거 + 샵 느낌)
     const embed = new EmbedBuilder()
       .setTitle("🎫 결제 안내")
       .setDescription(
-        `• 🆔 PSID: ${psid}\n` +
-          `• 📦 제품: ${selected.label}\n` +
+        `• 📦 제품: ${selected.label}\n` +
           `• 🔢 수량: ${qty}개\n\n` +
           `💵 **결제금액: ${formatWon(finalWon)}** (${discountText})\n\n` +
           `🏦 계좌\n` +
@@ -922,7 +894,7 @@ client.on("interactionCreate", async (interaction) => {
     const productInput = new TextInputBuilder()
       .setCustomId("product")
       .setLabel("구매한 상품")
-      .setPlaceholder("예: 로블 새 계정 / 5글자 계정 / 다이아 메타 등")
+      .setPlaceholder("예: 다이아 메타")
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
