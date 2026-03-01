@@ -28,6 +28,9 @@ const ACCOUNT_TEXT = "토스뱅크 1002-4249-3478 김형준";
 // ✅ 구매-로그 채널 ID (고정)
 const LOG_CHANNEL_ID = "1475527552775753779";
 
+// ✅ 구매리뷰 채널 ID (여기에 리뷰 채널 ID 넣기 / 안 쓰면 비워둬도 됨)
+const REVIEW_CHANNEL_ID = "1477334923932340416";
+
 // (선택) 랭킹 자동 업로드 채널 ID (원하면 넣기, 아니면 "")
 const RANK_CHANNEL_ID = "";
 
@@ -51,23 +54,12 @@ const VVIP_DISCOUNT = 0.05; // VVIP 5%
 const PRICE_TO_WON_MULTIPLIER = 10000;
 
 // ✅ 재고를 "티켓 생성 시점"에 홀드(예약)할지 여부
-// - true 추천: 동시구매 오버셀 방지
-// - 단, 미결제 티켓이면 재고가 묶이므로 !티켓취소로 복구 가능
 const HOLD_STOCK_ON_TICKET_CREATE = true;
 
 // ✅ 상품 목록 (packSize = 수량 1개당 차감되는 "마리" 수)
 const PRODUCTS = [
-  { label: "머니 , 캔디 콜로살 코브라 10개", value: "cobra10", unitPrice: 0.25, ticketName: "코브라10개", packSize: 10 },
-  { label: "머니 캔디 콜로살 큐피트론 10개", value: "cupid10", unitPrice: 0.25, ticketName: "큐피트론10개", packSize: 10 },
-  { label: "머니 , 캔디 콜로살 미야올 10개", value: "miya10", unitPrice: 0.45, ticketName: "미야올10개", packSize: 10 },
-
-  // ✅ 다이아 메타 (가격 변경: 0.5)
   { label: "다이아 메타", value: "meta", unitPrice: 0.5, ticketName: "다이아메타", packSize: 1 },
-
-  // ✅ 추가된 아이템: 다이아 막뮤 (0.5)
   { label: "다이아 막뮤", value: "makmyu", unitPrice: 0.5, ticketName: "다이아막뮤", packSize: 1 },
-
-  // ✅ 아누부부 (가격 변경: 0.3)
   { label: "다이야 아누부부", value: "anubu", unitPrice: 0.3, ticketName: "아누부부", packSize: 1 },
 ];
 
@@ -80,7 +72,7 @@ function loadData() {
   try {
     if (!fs.existsSync(DATA_PATH)) {
       const init = {
-        users: {},
+        users: {}, // { [userId]: { spentWon, orders, psid? } }
         totalSalesWon: 0,
         totalOrders: 0,
         salesByDate: {},
@@ -110,11 +102,6 @@ function saveData(data) {
 function formatWon(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "가격정보없음";
   return n.toLocaleString("ko-KR") + "원";
-}
-
-function formatAnimals(n) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "재고정보없음";
-  return `${n.toLocaleString("ko-KR")}마리`;
 }
 
 function getKSTDateKey(date = new Date()) {
@@ -193,27 +180,19 @@ function resolveProductValue(inputRaw) {
 
   const input = String(inputRaw).trim().toLowerCase().replace(/\s+/g, "");
 
-  // 1) 코드로 직접
   const byCode = PRODUCTS.find((p) => p.value.toLowerCase() === input);
   if (byCode) return byCode.value;
 
-  // 2) ticketName(코브라10개)
   const byTicketName = PRODUCTS.find((p) => String(p.ticketName).toLowerCase().replace(/\s+/g, "") === input);
   if (byTicketName) return byTicketName.value;
 
-  // 3) label(전체명)
   const byLabel = PRODUCTS.find((p) => String(p.label).toLowerCase().replace(/\s+/g, "") === input);
   if (byLabel) return byLabel.value;
 
-  // 4) 키워드 포함 매칭
   const keywordMap = [
-    { keywords: ["코브라"], value: "cobra10" },
-    { keywords: ["큐피트론", "큐피"], value: "cupid10" },
-    { keywords: ["미야올", "미야"], value: "miya10" },
     { keywords: ["아누부부", "아누"], value: "anubu" },
-
-    // ✅ 다이아 메타 키워드(기존 유지)
-    { keywords: ["다이아메타", "다이아메타", "다이아메타", "다이아 메타", "메타"], value: "meta" },
+    { keywords: ["다이아메타", "다이아 메타", "메타"], value: "meta" },
+    { keywords: ["막뮤", "다이아막뮤", "다이아 막뮤"], value: "makmyu" },
   ];
 
   for (const item of keywordMap) {
@@ -256,7 +235,6 @@ function getStockAnimals(data, productValue) {
   return data.stock[productValue] || 0;
 }
 
-// ✅✅✅ FIXED: 정상 동작
 function addStockAnimals(data, productValue, amount) {
   ensureStockKeys(data);
   data.stock[productValue] = Math.max(0, (data.stock[productValue] || 0) + amount);
@@ -265,6 +243,11 @@ function addStockAnimals(data, productValue, amount) {
 function setStockAnimals(data, productValue, amount) {
   ensureStockKeys(data);
   data.stock[productValue] = Math.max(0, amount);
+}
+
+function formatAnimals(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "재고정보없음";
+  return `${n.toLocaleString("ko-KR")}마리`;
 }
 
 function buildStockText(data) {
@@ -335,19 +318,45 @@ async function sendYesterdaySalesReport() {
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // ✅ 구매 버튼 설치
-  if (message.content === "!구매설치") {
-    const buyBtn = new ButtonBuilder().setCustomId("buy_open").setLabel("🛒 구매하기").setStyle(ButtonStyle.Primary);
+  // ✅ 패널 설치 (관리자만) - 구매/정보 버튼 2개
+  if (message.content === "!패널설치") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있어.");
+    }
+
+    const panelEmbed = new EmbedBuilder()
+      .setColor(0x2f8cff)
+      .setTitle("알파몰")
+      .setDescription("아래 버튼을 클릭해 제품을 구매하실 수 있습니다.")
+      .setTimestamp();
+
+    const buyBtn = new ButtonBuilder().setCustomId("buy_open").setLabel("구매").setStyle(ButtonStyle.Primary);
+    const infoBtn = new ButtonBuilder().setCustomId("panel_info").setLabel("정보").setStyle(ButtonStyle.Secondary);
 
     await message.channel.send({
-      content: "📦 아래 버튼을 눌러 상품을 구매하세요.",
-      components: [new ActionRowBuilder().addComponents(buyBtn)],
+      embeds: [panelEmbed],
+      components: [new ActionRowBuilder().addComponents(buyBtn, infoBtn)],
     });
 
-    return message.reply("✅ 설치 완료");
+    return message.reply("✅ 패널 설치 완료");
   }
 
-  // ✅ 총 매출 확인 (관리자만)  --- (원래 있던 명령어 복구)
+  // ✅ 후기 버튼 설치 (관리자만)
+  if (message.content === "!후기설치") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ 관리자만 사용할 수 있어.");
+    }
+    if (!REVIEW_CHANNEL_ID) return message.reply("❌ REVIEW_CHANNEL_ID 먼저 넣어줘.");
+
+    const reviewBtn = new ButtonBuilder().setCustomId("review_open").setLabel("⭐ 후기 남기기").setStyle(ButtonStyle.Success);
+    await message.channel.send({
+      content: "📝 아래 버튼을 눌러 구매후기를 남겨주세요!",
+      components: [new ActionRowBuilder().addComponents(reviewBtn)],
+    });
+    return message.reply("✅ 후기 버튼 설치 완료");
+  }
+
+  // ✅ 총 매출 확인 (관리자만)
   if (message.content === "!매출") {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply("❌ 관리자만 사용할 수 있어.");
@@ -356,7 +365,7 @@ client.on("messageCreate", async (message) => {
     return message.reply(`📊 총 매출: ${formatWon(data.totalSalesWon)} / 📦 총 판매: ${data.totalOrders}건`);
   }
 
-  // ✅ 오늘 매출 확인 (관리자만) --- (원래 있던 명령어 복구)
+  // ✅ 오늘 매출 확인 (관리자만)
   if (message.content === "!일매출") {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply("❌ 관리자만 사용할 수 있어.");
@@ -368,14 +377,14 @@ client.on("messageCreate", async (message) => {
     return message.reply(`📊 오늘(${todayKey}) 매출: ${formatWon(todaySales)} / ${todayOrders}건`);
   }
 
-  // ✅ 랭킹 --- (원래 있던 명령어 복구)
+  // ✅ 랭킹
   if (message.content === "!랭킹") {
     const data = loadData();
     const topText = buildTop5RankingText(data);
     return message.channel.send(`# 🏆 누적 구매금액 TOP 5\n${topText}`);
   }
 
-  // ✅ 특정 유저 누적금액 (관리자만) --- (원래 있던 명령어 복구)
+  // ✅ 특정 유저 누적금액 (관리자만)
   if (message.content.startsWith("!누적금액")) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply("❌ 관리자만 사용할 수 있어.");
@@ -392,7 +401,7 @@ client.on("messageCreate", async (message) => {
     return message.reply(`📊 <@${mentioned.id}> 누적 구매금액: ${formatWon(spent)}\n🏷️ 현재 등급: ${tier}`);
   }
 
-  // ✅ 매출만 초기화 (관리자만) - 누적 구매금액/랭킹 유지 --- (원래 있던 명령어 복구)
+  // ✅ 매출만 초기화 (관리자만)
   if (message.content === "!매출초기화") {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply("❌ 관리자만 사용할 수 있습니다.");
@@ -408,7 +417,7 @@ client.on("messageCreate", async (message) => {
     return message.reply("📉 매출 데이터만 초기화되었습니다.\n(누적 구매금액 / 등급 / 랭킹은 유지됩니다)");
   }
 
-  // ✅ 랭킹만 초기화 (관리자만) - 매출 유지 --- (원래 있던 명령어 복구)
+  // ✅ 랭킹만 초기화 (관리자만)
   if (message.content === "!랭킹초기화") {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply("❌ 관리자만 사용할 수 있습니다.");
@@ -428,8 +437,7 @@ client.on("messageCreate", async (message) => {
     return message.reply(`📦 **현재 재고(마리 기준)**\n${buildStockText(data)}`);
   }
 
-  // ✅ 재고 충전 (관리자만) - 한글/코드 지원
-  // 예: !재고충전 코브라 100
+  // ✅ 재고 충전 (관리자만)
   if (message.content.startsWith("!재고충전")) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const parts = message.content.trim().split(/\s+/);
@@ -440,8 +448,8 @@ client.on("messageCreate", async (message) => {
     if (!productValue || !Number.isFinite(amount)) {
       return message.reply(
         "❌ 사용법: `!재고충전 상품명 마리수`\n" +
-          "예: `!재고충전 코브라 100`\n" +
-          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부, 다이아메타, 다이아막뮤"
+          "예: `!재고충전 메타 100`\n" +
+          "가능 상품: 메타, 막뮤, 아누부부"
       );
     }
 
@@ -452,9 +460,7 @@ client.on("messageCreate", async (message) => {
     return message.reply(`✅ 재고 충전 완료: **${productValue}** → 현재 ${formatAnimals(getStockAnimals(data, productValue))}`);
   }
 
-  // ✅ 재고 삭제/차감 (관리자만) - 한글/코드 지원
-  // 예: !재고삭제 코브라 30 (30마리 차감)
-  // 예: !재고삭제 코브라     (0으로 초기화)
+  // ✅ 재고 삭제/차감 (관리자만)
   if (message.content.startsWith("!재고삭제")) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
     const parts = message.content.trim().split(/\s+/);
@@ -465,8 +471,8 @@ client.on("messageCreate", async (message) => {
     if (!productValue) {
       return message.reply(
         "❌ 사용법: `!재고삭제 상품명 [마리수]`\n" +
-          "예: `!재고삭제 코브라 30` 또는 `!재고삭제 코브라`\n" +
-          "가능 상품: 코브라, 큐피트론, 미야올, 아누부부, 다이아메타, 다이아막뮤"
+          "예: `!재고삭제 메타 30` 또는 `!재고삭제 메타`\n" +
+          "가능 상품: 메타, 막뮤, 아누부부"
       );
     }
 
@@ -483,7 +489,7 @@ client.on("messageCreate", async (message) => {
     return message.reply(`✅ 재고 반영 완료: **${productValue}** → 현재 ${formatAnimals(getStockAnimals(data, productValue))}`);
   }
 
-  // ✅ 티켓 취소 (관리자만 / 티켓에서만) - 홀드된 재고 복구
+  // ✅ 티켓 취소 (관리자만 / 티켓에서만)
   if (message.content === "!티켓취소") {
     if (!message.channel.name.includes("ticket-")) return message.reply("❌ 티켓 채널에서만 사용 가능");
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
@@ -501,9 +507,7 @@ client.on("messageCreate", async (message) => {
       const data = loadData();
       addStockAnimals(data, productValue, holdAnimals);
       saveData(data);
-      await message.reply(
-        `✅ 홀드된 재고 복구: **${productValue}** +${formatAnimals(holdAnimals)} (현재 ${formatAnimals(getStockAnimals(data, productValue))})`
-      );
+      await message.reply(`✅ 홀드된 재고 복구: **${productValue}** +${formatAnimals(holdAnimals)} (현재 ${formatAnimals(getStockAnimals(data, productValue))})`);
     } else {
       await message.reply("✅ 티켓 취소(재고 홀드 없음 또는 복구할 값 없음)");
     }
@@ -511,7 +515,7 @@ client.on("messageCreate", async (message) => {
     setTimeout(() => message.channel.delete("Ticket canceled").catch(() => null), 1500);
   }
 
-  // ✅ 구매완료 (관리자만 / 티켓에서만)
+  // ✅ 구매완료 (관리자만 / 티켓에서만) + 구매로그를 Embed(사진 느낌)로 출력
   if (message.content === "!구매완료") {
     if (!message.channel.name.includes("ticket-")) return message.reply("❌ 티켓 채널에서만 사용 가능");
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("❌ 관리자만 사용할 수 있어.");
@@ -528,6 +532,7 @@ client.on("messageCreate", async (message) => {
     const discountMatch = topic.match(/discount:([0-9.]+)/);
     const holdMatch = topic.match(/hold:(\d+)/);
     const heldMatch = topic.match(/held:(\d)/);
+    const psidMatch = topic.match(/psid:([^ ]+)/i);
 
     const buyerId = buyerMatch ? buyerMatch[1] : null;
     const productValue = productMatch ? productMatch[1] : null;
@@ -539,15 +544,15 @@ client.on("messageCreate", async (message) => {
     const holdAnimals = holdMatch ? Number(holdMatch[1]) : 0;
     const held = heldMatch ? Number(heldMatch[1]) : 0;
 
+    const psid = psidMatch ? psidMatch[1] : "미입력";
+
     if (!buyerId) return message.reply("❌ 구매자 정보 없음");
     if (typeof finalWon !== "number") return message.reply("❌ 결제금액 정보 없음");
 
     const productObj = PRODUCTS.find((p) => p.value === productValue);
     const productLabel = productObj ? productObj.label : "(상품정보없음)";
-    const qtyText = Number.isInteger(qty) ? ` / 수량: ${qty}개` : "";
 
     // ✅ 안전장치: held=0(홀드 안 된 티켓) 이면 여기서 재고 차감
-    // - held=1이면 티켓 생성 시점에 이미 차감돼있으니 중복 차감 X
     if (productObj && (!HOLD_STOCK_ON_TICKET_CREATE || held !== 1)) {
       const needAnimals =
         Number.isInteger(qty) && qty > 0
@@ -582,6 +587,10 @@ client.on("messageCreate", async (message) => {
 
     data.users[buyerId].spentWon += finalWon;
     data.users[buyerId].orders += 1;
+
+    // ✅ PSID 저장(정보 버튼에서 보이게)
+    data.users[buyerId].psid = psid;
+
     data.totalSalesWon += finalWon;
     data.totalOrders += 1;
 
@@ -601,7 +610,7 @@ client.on("messageCreate", async (message) => {
       if (tier === "VVIP") await grantRoleIfExists(buyerMember, ROLE_VVIP_NAME);
     }
 
-    // 다음 등급 안내(원래 있던 스타일 복구)
+    // 다음 등급 안내
     let nextText = "";
     if (tier === "NORMAL") nextText = `VIP까지 ${formatWon(VIP_MIN_WON - spent)} 남음`;
     else if (tier === "VIP") nextText = `VVIP까지 ${formatWon(VVIP_MIN_WON - spent)} 남음`;
@@ -614,19 +623,23 @@ client.on("messageCreate", async (message) => {
       stockLeftText = `\n📦 남은 재고: ${formatAnimals(left)}`;
     }
 
-    await logChannel.send(
-      `✅ <@${buyerId}>님 ${productLabel}${qtyText} 구매 감사합니다! 🎉\n` +
-        `💰 원가: ${typeof baseWon === "number" ? formatWon(baseWon) : formatWon(finalWon)}\n` +
-        `💸 할인: ${Math.round(discountRate * 100)}%\n` +
-        `💵 결제금액: ${formatWon(finalWon)}\n` +
-        `🏷️ 등급: ${tier}\n` +
-        `📌 누적 구매금액: ${formatWon(spent)}\n` +
-        `⭐ ${nextText}` +
-        stockLeftText +
-        `\n처리자: <@${message.author.id}>`
-    );
+    // ✅ 구매로그 Embed (사진 느낌: • 리스트 / PSID, DISCORD, 구매상품, 구매 갯수)
+    const buyerUser = await client.users.fetch(buyerId).catch(() => null);
+    const purchaseEmbed = new EmbedBuilder()
+      .setColor(0x2f8cff)
+      .setTitle(`${psid}님의 구매 로그`)
+      .setThumbnail(buyerUser?.displayAvatarURL?.({ size: 256 }) || null)
+      .setDescription(
+        `• 🆔 유저 PSID: **${psid}**\n` +
+        `• 👤 유저 DISCORD: <@${buyerId}>\n` +
+        `• 💰 구매상품: ${productLabel}\n` +
+        `• 💰 구매 갯수: **${Number.isInteger(qty) ? qty : "미기록"}**`
+      )
+      .setTimestamp();
 
-    // ✅ 랭킹 자동 업로드 채널(원래 기능 복구)
+    await logChannel.send({ embeds: [purchaseEmbed] });
+
+    // ✅ 랭킹 자동 업로드 채널
     if (RANK_CHANNEL_ID) {
       const rankCh = await message.guild.channels.fetch(RANK_CHANNEL_ID).catch(() => null);
       if (rankCh) {
@@ -641,7 +654,17 @@ client.on("messageCreate", async (message) => {
     if (newName.length > 100) newName = newName.slice(0, 100);
     await message.channel.setName(newName).catch(() => null);
 
-    await message.reply("✅ 구매 완료 처리됨. 5초 후 티켓 삭제");
+    await message.reply(
+      `✅ 구매 완료 처리됨\n` +
+      `💰 원가: ${typeof baseWon === "number" ? formatWon(baseWon) : formatWon(finalWon)}\n` +
+      `💸 할인: ${Math.round(discountRate * 100)}%\n` +
+      `💵 결제금액: ${formatWon(finalWon)}\n` +
+      `🏷️ 등급: ${tier}\n` +
+      `📌 누적 구매금액: ${formatWon(spent)}\n` +
+      `⭐ ${nextText}${stockLeftText}\n` +
+      `5초 후 티켓 삭제`
+    );
+
     setTimeout(() => message.channel.delete("Auto delete after purchase complete").catch(() => null), 5000);
   }
 });
@@ -658,6 +681,48 @@ client.on("interactionCreate", async (interaction) => {
       return t.includes(`buyer:${interaction.user.id}`);
     });
 
+  // ✅ 패널 "정보" 버튼 (사진 느낌)
+  if (interaction.isButton() && interaction.customId === "panel_info") {
+    const data = loadData();
+    const u = data.users?.[interaction.user.id] || {};
+    const psid = u.psid || "미등록";
+    const spentWon = u.spentWon || 0;
+
+    const tier = getTierBySpent(spentWon);
+    const tierText = tier === "VVIP" ? "VVIP" : tier === "VIP" ? "VIP" : "비구매자";
+
+    const embed = new EmbedBuilder()
+      .setColor(0x2f8cff)
+      .setTitle("📝 기본 정보")
+      .setDescription(
+        `• 👤 아이디: ${interaction.user.id}\n` +
+        `• 🆔 PSID: ${psid}\n\n` +
+        `💰 **금액 정보**\n` +
+        `• 💵 잔액: 0원\n` +
+        `• 🎁 누적구매: ${formatWon(spentWon)}\n\n` +
+        `👑 **등급 정보**\n` +
+        `• 🏅 등급: ${tierText}`
+      )
+      .setTimestamp();
+
+    const passBtn = new ButtonBuilder().setCustomId("auth_pass").setLabel("PASS 인증하기").setStyle(ButtonStyle.Secondary);
+    const smsBtn = new ButtonBuilder().setCustomId("auth_sms").setLabel("SMS 인증하기").setStyle(ButtonStyle.Secondary);
+
+    return interaction.reply({
+      embeds: [embed],
+      components: [new ActionRowBuilder().addComponents(passBtn), new ActionRowBuilder().addComponents(smsBtn)],
+      ephemeral: true,
+    });
+  }
+
+  // PASS / SMS 버튼 (일단 안내만)
+  if (interaction.isButton() && interaction.customId === "auth_pass") {
+    return interaction.reply({ content: "✅ PASS 인증은 준비중입니다. (원하면 링크/절차 붙여줄게)", ephemeral: true });
+  }
+  if (interaction.isButton() && interaction.customId === "auth_sms") {
+    return interaction.reply({ content: "✅ SMS 인증은 준비중입니다. (원하면 링크/절차 붙여줄게)", ephemeral: true });
+  }
+
   // 구매하기 버튼 → 상품 선택
   if (interaction.isButton() && interaction.customId === "buy_open") {
     const already = findExistingTicket();
@@ -667,7 +732,7 @@ client.on("interactionCreate", async (interaction) => {
 
     const menu = new StringSelectMenuBuilder()
       .setCustomId("product_select")
-      .setPlaceholder("상품을 선택하세요")
+      .setPlaceholder("제품을 선택하세요")
       .addOptions(
         PRODUCTS.map((p) => {
           const animals = getStockAnimals(data, p.value);
@@ -682,13 +747,13 @@ client.on("interactionCreate", async (interaction) => {
       );
 
     return interaction.reply({
-      content: "📦 상품을 선택해주세요.",
+      content: "📦 제품을 선택하세요.",
       components: [new ActionRowBuilder().addComponents(menu)],
       ephemeral: true,
     });
   }
 
-  // 상품 선택 → 수량 입력(모달)
+  // 상품 선택 → 수량+PSID 입력(모달)
   if (interaction.isStringSelectMenu() && interaction.customId === "product_select") {
     const already = findExistingTicket();
     if (already) return interaction.reply({ content: `❌ 이미 진행 중인 티켓이 있습니다: <#${already.id}>`, ephemeral: true });
@@ -702,16 +767,24 @@ client.on("interactionCreate", async (interaction) => {
     const packs = selected.packSize > 0 ? Math.floor(animals / selected.packSize) : 0;
     if (packs <= 0) return interaction.reply({ content: "❌ 해당 상품은 현재 품절입니다.", ephemeral: true });
 
-    const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량 입력 (최대 100개)");
+    const modal = new ModalBuilder().setCustomId(`qty_modal:${selected.value}`).setTitle("수량/PSID 입력");
 
     const qtyInput = new TextInputBuilder()
       .setCustomId("qty")
-      .setLabel("수량을 숫자로 입력하세요")
-      .setPlaceholder("예: 1, 2, 10, 100")
+      .setLabel("수량(1~100)")
+      .setPlaceholder("예: 1, 2, 10")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const psidInput = new TextInputBuilder()
+      .setCustomId("psid")
+      .setLabel("PSID 입력(필수)")
+      .setPlaceholder("예: zhqmfk2011")
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     modal.addComponents(new ActionRowBuilder().addComponents(qtyInput));
+    modal.addComponents(new ActionRowBuilder().addComponents(psidInput));
     return interaction.showModal(modal);
   }
 
@@ -730,6 +803,10 @@ client.on("interactionCreate", async (interaction) => {
 
     const qty = Number(qtyClean);
     if (!Number.isInteger(qty) || qty < 1 || qty > 100) return interaction.reply({ content: "❌ 수량은 1~100 사이로 입력하세요.", ephemeral: true });
+
+    const psidRaw = interaction.fields.getTextInputValue("psid").trim();
+    const psid = psidRaw.replace(/\s+/g, "");
+    if (!psid) return interaction.reply({ content: "❌ PSID를 입력해주세요.", ephemeral: true });
 
     const needAnimals = qty * (selected.packSize || 1);
 
@@ -753,6 +830,12 @@ client.on("interactionCreate", async (interaction) => {
       held = 1;
     }
 
+    // ✅ PSID 유저 데이터에도 저장(정보 버튼에서 보이게)
+    const d0 = loadData();
+    if (!d0.users[interaction.user.id]) d0.users[interaction.user.id] = { spentWon: 0, orders: 0 };
+    d0.users[interaction.user.id].psid = psid;
+    saveData(d0);
+
     const data = loadData();
     const spentWon = data.users?.[interaction.user.id]?.spentWon || 0;
     const tier = getTierBySpent(spentWon);
@@ -773,7 +856,7 @@ client.on("interactionCreate", async (interaction) => {
     const ticketChannel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      topic: `buyer:${interaction.user.id} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
+      topic: `buyer:${interaction.user.id} psid:${psid} product:${selected.value} qty:${qty} basewon:${baseWon} won:${finalWon} discount:${discountRate} hold:${needAnimals} held:${held}`,
       permissionOverwrites: [
         { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel] },
@@ -798,17 +881,24 @@ client.on("interactionCreate", async (interaction) => {
       console.log("정렬 오류:", e?.message || e);
     }
 
+    // ✅✅✅ 티켓 생성 안내 문구 (C안 + 차감 제거 + 샵 느낌)
     const embed = new EmbedBuilder()
-      .setTitle("🎫 티켓이 정상적으로 생성되었습니다")
+      .setTitle("🎫 결제 안내")
       .setDescription(
-        `🏷️ 등급: ${tier}\n💸 할인: ${discountText}\n\n📦 제품: ${selected.label}\n📦 수량: ${qty}개\n🐾 차감: ${formatAnimals(needAnimals)}\n💰 원가: ${formatWon(baseWon)}\n💵 결제금액: ${formatWon(finalWon)}\n\n계좌: ${ACCOUNT_TEXT}\n스샷 인증 보내주세요.`
+        `• 🆔 PSID: ${psid}\n` +
+          `• 📦 제품: ${selected.label}\n` +
+          `• 🔢 수량: ${qty}개\n\n` +
+          `💵 **결제금액: ${formatWon(finalWon)}** (${discountText})\n\n` +
+          `🏦 계좌\n` +
+          `\`\`\`\n${ACCOUNT_TEXT}\n\`\`\`\n` +
+          `입금 후 스샷 인증 보내주세요.`
       )
       .setTimestamp();
 
     const copyBtn = new ButtonBuilder().setCustomId(`copy_account:${finalWon}`).setLabel("💳 계좌 문구 복사").setStyle(ButtonStyle.Success);
 
     await ticketChannel.send({
-      content: `${ADMIN_MENTIONS}\n${priorityText}\n\n💰 **결제금액: ${formatWon(finalWon)}** (${discountText})`,
+      content: `${ADMIN_MENTIONS}\n${priorityText}`,
       embeds: [embed],
       components: [new ActionRowBuilder().addComponents(copyBtn)],
     });
@@ -821,6 +911,69 @@ client.on("interactionCreate", async (interaction) => {
     const won = Number(interaction.customId.split(":")[1]);
     const text = `${ACCOUNT_TEXT}\n금액 ${formatWon(won)}`;
     return interaction.reply({ content: `\`\`\`${text}\`\`\``, ephemeral: true });
+  }
+
+  // 후기 버튼 → 모달
+  if (interaction.isButton() && interaction.customId === "review_open") {
+    if (!REVIEW_CHANNEL_ID) return interaction.reply({ content: "❌ REVIEW_CHANNEL_ID 먼저 설정해줘.", ephemeral: true });
+
+    const modal = new ModalBuilder().setCustomId("review_modal").setTitle("구매후기 작성");
+
+    const productInput = new TextInputBuilder()
+      .setCustomId("product")
+      .setLabel("구매한 상품")
+      .setPlaceholder("예: 로블 새 계정 / 5글자 계정 / 다이아 메타 등")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const starInput = new TextInputBuilder()
+      .setCustomId("stars")
+      .setLabel("별점(1~5 숫자)")
+      .setPlaceholder("예: 5")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const contentInput = new TextInputBuilder()
+      .setCustomId("content")
+      .setLabel("후기 내용")
+      .setPlaceholder("예: 빠르고 친절해요!")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(productInput));
+    modal.addComponents(new ActionRowBuilder().addComponents(starInput));
+    modal.addComponents(new ActionRowBuilder().addComponents(contentInput));
+
+    return interaction.showModal(modal);
+  }
+
+  // 후기 모달 제출 → 후기 채널에 Embed 업로드(사진 느낌)
+  if (interaction.isModalSubmit() && interaction.customId === "review_modal") {
+    if (!REVIEW_CHANNEL_ID) return interaction.reply({ content: "❌ REVIEW_CHANNEL_ID 먼저 설정해줘.", ephemeral: true });
+
+    const product = interaction.fields.getTextInputValue("product").trim();
+    const starsRaw = interaction.fields.getTextInputValue("stars").trim();
+    const content = interaction.fields.getTextInputValue("content").trim();
+
+    const starsNum = Number(starsRaw);
+    if (!Number.isInteger(starsNum) || starsNum < 1 || starsNum > 5) {
+      return interaction.reply({ content: "❌ 별점은 1~5 숫자로 입력해줘.", ephemeral: true });
+    }
+
+    const stars = "⭐".repeat(starsNum);
+
+    const reviewCh = await interaction.guild.channels.fetch(REVIEW_CHANNEL_ID).catch(() => null);
+    if (!reviewCh) return interaction.reply({ content: "❌ 리뷰 채널을 찾을 수 없음 (ID 확인)", ephemeral: true });
+
+    const embed = new EmbedBuilder()
+      .setColor(0x2f8cff)
+      .setTitle(`${interaction.user.username}님의 구매후기`)
+      .setThumbnail(interaction.user.displayAvatarURL({ size: 256 }))
+      .setDescription(`• 구매한 상품: ${product}\n• 별점: ${stars}\n• 후기내용: ${content}`)
+      .setTimestamp();
+
+    await reviewCh.send({ embeds: [embed] });
+    return interaction.reply({ content: "✅ 후기 등록 완료!", ephemeral: true });
   }
 });
 
